@@ -1,0 +1,72 @@
+﻿# Environment variables and secrets
+.env
+.env.*
+!.env.example
+!.env.template
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+runtime/
+
+# Python cache and test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Logs
+*.log
+logs/
+
+# Local databases and transient database files
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Downloaded LLM and speech model weights
+*.gguf
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.onnx
+
+# Python package/build artifacts
+build/
+dist/
+*.egg-info/
+
+# Frontend dependencies and build output
+node_modules/
+dist/
+.vite/
+
+# Generated audio output
+# Preserve the existing ASR/TTS benchmark fixtures
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+!data/asr_test.wav
+!data/tts_test.wav
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# IDE and operating system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
