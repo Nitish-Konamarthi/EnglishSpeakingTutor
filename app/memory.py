@@ -1,8 +1,8 @@
 """Persistent local memory with hybrid vector and SQLite FTS5 retrieval.
 
-Feature-hash vectors are a dependency-free development baseline. The memory
-service boundary lets a planned neural embedder and sqlite-vec backend replace
-it without changing the conversation orchestration.
+Feature-hash vectors remain available as a dependency-free test/offline
+fallback. The browser application injects a local neural embedder and uses
+sqlite-vec for dense candidates plus FTS5 for lexical candidates.
 """
 
 from __future__ import annotations
@@ -69,9 +69,12 @@ class ConversationMemory:
     dependency-free feature-hash baseline without changing the tutor loop.
     """
 
-    def __init__(self, database_path: Path | str, dimensions: int = 384):
+    def __init__(self, database_path: Path | str, dimensions: int = 384, embedder=None):
         self.database_path = str(database_path)
-        self.dimensions = dimensions
+        self.embedder = embedder
+        self.dimensions = int(embedder.dimensions) if embedder else dimensions
+        self.embedding_model = embedder.model_id if embedder else "feature-hash-v1"
+        self.vector_index = embedder is not None
         Path(self.database_path).parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             connection.execute(
@@ -80,9 +83,13 @@ class ConversationMemory:
                     user_text TEXT NOT NULL,
                     assistant_text TEXT NOT NULL,
                     embedding TEXT NOT NULL,
+                    embedding_model TEXT NOT NULL DEFAULT 'feature-hash-v1',
                     created_at REAL NOT NULL
                 )"""
             )
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(memories)")}
+            if "embedding_model" not in columns:
+                connection.execute("ALTER TABLE memories ADD COLUMN embedding_model TEXT NOT NULL DEFAULT 'feature-hash-v1'")
             connection.execute(
                 """CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
                     user_text, assistant_text,
@@ -110,12 +117,26 @@ class ConversationMemory:
             # Rebuild once at startup so rows created by the earlier schema
             # version are searchable through FTS5 as well.
             connection.execute("INSERT INTO memories_fts(memories_fts) VALUES ('rebuild')")
+            if self.vector_index:
+                connection.execute(
+                    f"CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec USING vec0(memory_id INTEGER PRIMARY KEY, embedding FLOAT[{self.dimensions}] distance_metric=cosine)"
+                )
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self.database_path, timeout=10)
         connection.row_factory = sqlite3.Row
         try:
+            try:
+                # A database may already contain memories_vec even when the
+                # current startup must use the lexical fallback.
+                import sqlite_vec
+                connection.enable_load_extension(True)
+                sqlite_vec.load(connection)
+                connection.enable_load_extension(False)
+            except ModuleNotFoundError:
+                if self.vector_index:
+                    raise
             yield connection
             connection.commit()
         except Exception:
@@ -127,21 +148,28 @@ class ConversationMemory:
     def add(self, user_text: str, assistant_text: str) -> int:
         """Persist one completed tutor exchange and its search vector."""
         text = f"Learner: {user_text}\nTutor: {assistant_text}"
-        vector = embed_text(text, self.dimensions)
+        vector = self.embedder.encode([text])[0] if self.embedder else embed_text(text, self.dimensions)
         with self._connect() as connection:
             cursor = connection.execute(
-                "INSERT INTO memories(user_text, assistant_text, embedding, created_at) "
-                "VALUES (?, ?, ?, ?)",
-                (user_text, assistant_text, json.dumps(vector), time.time()),
+                "INSERT INTO memories(user_text, assistant_text, embedding, embedding_model, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (user_text, assistant_text, json.dumps(vector), self.embedding_model, time.time()),
             )
-            return int(cursor.lastrowid)
+            memory_id = int(cursor.lastrowid)
+            if self.vector_index:
+                import sqlite_vec
+                connection.execute(
+                    "INSERT INTO memories_vec(memory_id, embedding) VALUES (?, ?)",
+                    (memory_id, sqlite_vec.serialize_float32(vector)),
+                )
+            return memory_id
 
     def search(self, query: str, limit: int = 8) -> list[dict[str, Any]]:
         """Fuse vector and exact-term candidates, then apply recency scoring."""
-        query_vector = embed_text(query, self.dimensions)
+        query_vector = self.embedder.encode([query])[0] if self.embedder else embed_text(query, self.dimensions)
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT id, user_text, assistant_text, embedding, created_at FROM memories"
+                "SELECT id, user_text, assistant_text, embedding, embedding_model, created_at FROM memories"
             ).fetchall()
             terms = [
                 term.lower() for term in _TOKEN_RE.findall(query)
@@ -156,24 +184,42 @@ class ConversationMemory:
                     (fts_query,),
                 ).fetchall()
 
-        vector_matches = []
-        for row in rows:
-            vector = json.loads(row["embedding"])
-            score = cosine_similarity(query_vector, vector)
-            vector_matches.append({
-                "id": row["id"],
-                "user_text": row["user_text"],
-                "assistant_text": row["assistant_text"],
-                "created_at": row["created_at"],
-                "similarity": score,
-            })
-        vector_matches.sort(key=lambda item: item["similarity"], reverse=True)
-        vector_matches = [
-            item for item in vector_matches if item["similarity"] >= 0.20
-        ]
+            vector_rows = []
+            if self.vector_index:
+                import sqlite_vec
+                vector_rows = connection.execute(
+                    "SELECT memory_id, distance FROM memories_vec WHERE embedding MATCH ? AND k = ?",
+                    (sqlite_vec.serialize_float32(query_vector), 20),
+                ).fetchall()
+
+        by_id = {
+            row["id"]: {
+                "id": row["id"], "user_text": row["user_text"],
+                "assistant_text": row["assistant_text"], "created_at": row["created_at"],
+                "similarity": 0.0, "embedding_model": row["embedding_model"],
+            }
+            for row in rows
+        }
+        if self.vector_index:
+            vector_matches = []
+            for row in vector_rows:
+                item = by_id.get(row["memory_id"])
+                if item and item["embedding_model"] == self.embedding_model:
+                    item["similarity"] = max(-1.0, 1.0 - float(row["distance"]))
+                    if item["similarity"] >= 0.25:
+                        vector_matches.append(item)
+        else:
+            vector_matches = []
+            for row in rows:
+                if row["embedding_model"] != self.embedding_model:
+                    continue
+                item = by_id[row["id"]]
+                item["similarity"] = cosine_similarity(query_vector, json.loads(row["embedding"]))
+                vector_matches.append(item)
+            vector_matches.sort(key=lambda item: item["similarity"], reverse=True)
+            vector_matches = [item for item in vector_matches if item["similarity"] >= 0.20]
         vector_rank = {item["id"]: rank for rank, item in enumerate(vector_matches[:20], 1)}
         lexical_rank = {row["id"]: rank for rank, row in enumerate(fts_rows, 1)}
-        by_id = {item["id"]: item for item in vector_matches}
         candidate_ids = set(vector_rank) | set(lexical_rank)
         if not candidate_ids:
             return []
@@ -192,3 +238,47 @@ class ConversationMemory:
             scored.append(item)
         scored.sort(key=lambda item: item["score"], reverse=True)
         return scored[:max(0, limit)]
+
+    def reindex_neural(self, batch_size: int = 32) -> int:
+        """Backfill neural vectors for old turns without blocking live requests."""
+        if not self.vector_index:
+            return 0
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id,user_text,assistant_text FROM memories WHERE embedding_model != ? ORDER BY id",
+                (self.embedding_model,),
+            ).fetchall()
+        count = 0
+        for offset in range(0, len(rows), max(1, batch_size)):
+            batch = rows[offset:offset + batch_size]
+            texts = [f"Learner: {row['user_text']}\nTutor: {row['assistant_text']}" for row in batch]
+            vectors = self.embedder.encode(texts)
+            with self._connect() as connection:
+                import sqlite_vec
+                for row, vector in zip(batch, vectors):
+                    connection.execute(
+                        "UPDATE memories SET embedding=?,embedding_model=? WHERE id=?",
+                        (json.dumps(vector), self.embedding_model, row["id"]),
+                    )
+                    connection.execute("DELETE FROM memories_vec WHERE memory_id=?", (row["id"],))
+                    connection.execute(
+                        "INSERT INTO memories_vec(memory_id,embedding) VALUES (?,?)",
+                        (row["id"], sqlite_vec.serialize_float32(vector)),
+                    )
+                    count += 1
+        return count
+
+    def recent(self, limit: int = 50) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id,user_text,assistant_text,embedding_model,created_at FROM memories ORDER BY id DESC LIMIT ?",
+                (max(0, min(limit, 200)),),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def delete(self, memory_id: int) -> bool:
+        with self._connect() as connection:
+            if self.vector_index:
+                connection.execute("DELETE FROM memories_vec WHERE memory_id=?", (memory_id,))
+            cursor = connection.execute("DELETE FROM memories WHERE id=?", (memory_id,))
+        return cursor.rowcount > 0

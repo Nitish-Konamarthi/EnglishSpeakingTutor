@@ -1,0 +1,19 @@
+{
+  "memories": [
+    {"id": "language", "text": "My favourite programming language is Python.", "reply": "You enjoy using Python most."},
+    {"id": "cycling", "text": "I enjoy cycling on mountain trails at the weekend.", "reply": "Cycling outdoors is a good way to relax."},
+    {"id": "fluency", "text": "I want to improve my fluency and confidence when speaking English.", "reply": "Regular short conversations can help."},
+    {"id": "job", "text": "I work as a primary school teacher with young children.", "reply": "You teach children at a primary school."},
+    {"id": "food", "text": "I like cooking spicy food on weekends.", "reply": "Trying new recipes sounds fun."},
+    {"id": "music", "text": "I listen to classical music while reading.", "reply": "That sounds like a peaceful routine."},
+    {"id": "travel", "text": "I hope to visit Japan next spring.", "reply": "You are planning a spring trip."},
+    {"id": "reading", "text": "I read short science fiction stories before bed.", "reply": "Short stories are easy to fit into your day."}
+  ],
+  "queries": [
+    {"query": "Which coding language do I like best?", "relevant": "language"},
+    {"query": "What outdoor exercise do I enjoy on weekends?", "relevant": "cycling"},
+    {"query": "What do I want to get better at when talking in English?", "relevant": "fluency"},
+    {"query": "What work do I do with young children?", "relevant": "job"},
+    {"query": "What type of stories do I read at night?", "relevant": "reading"}
+  ]
+}

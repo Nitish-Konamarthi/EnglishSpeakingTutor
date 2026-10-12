@@ -1,5 +1,6 @@
 ﻿import os
 import time
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -8,6 +9,11 @@ import soundfile as sf
 import torch
 import whisper
 from kokoro import KPipeline
+
+if os.name == "nt":
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
 
 
 # ============================================================
