@@ -71,7 +71,15 @@ async function startMic() {
   const selectedInput=localStorage.getItem('tutor_audio_input')||'';
   const audioConstraints={channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true};
   if(selectedInput)audioConstraints.deviceId={exact:selectedInput};
-  const stream=await navigator.mediaDevices.getUserMedia({audio:audioConstraints});
+    let stream;
+    try{stream=await navigator.mediaDevices.getUserMedia({audio:audioConstraints});}
+    catch(error){
+     if(!selectedInput||!['NotFoundError','OverconstrainedError'].includes(error.name))throw error;
+     localStorage.removeItem('tutor_audio_input');
+     delete audioConstraints.deviceId;
+     status('Saved microphone unavailable; trying the system default…','busy');
+     stream=await navigator.mediaDevices.getUserMedia({audio:audioConstraints});
+    }
   if(request!==state.micRequest){stream.getTracks().forEach(track=>track.stop());return;}
   state.stream=stream;
   const context=new AudioContext();state.audioContext=context;await context.resume();
