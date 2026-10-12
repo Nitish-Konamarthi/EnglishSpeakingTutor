@@ -11,8 +11,17 @@ const { VoiceTurnDetector, shouldSpeakReply } = require('../frontend/voice.js');
     assert.match(html, new RegExp(`id=["']${id}["']`), `index.html must include #${id}`);
   }
   assert.match(html, /id="voice-sensitivity"[^>]*value="0\.03"/, 'the UI default must use the higher room-noise margin');
-  assert.match(fs.readFileSync(require.resolve('../frontend/app.js'), 'utf8'), /tutor_vad_threshold_v5/,
+  const app = fs.readFileSync(require.resolve('../frontend/app.js'), 'utf8');
+  assert.match(app, /tutor_vad_threshold_v5/,
     'a versioned key must discard previously saved lower defaults');
+  assert.match(app, /Saved microphone unavailable; trying the system default/,
+    'an unavailable saved microphone must fall back to the system default');
+  assert.match(fs.readFileSync(require.resolve('../frontend/style.css'), 'utf8'),
+    /\.shell\.sidebar-collapsed\{grid-template-columns:minmax\(0,1fr\)\}/,
+    'collapsed desktop layout must not retain an empty grid track');
+  assert.match(fs.readFileSync(require.resolve('../frontend/style.css'), 'utf8'),
+    /#menu-toggle\{position:relative;z-index:5/,
+    'the mobile menu toggle must remain above the open sidebar');
 }
 
 const rate = 48000;
