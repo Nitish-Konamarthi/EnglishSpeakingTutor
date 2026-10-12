@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f3ef">
+  <title>English Speaking Tutor</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/fonts.css">
+  <link rel="stylesheet" href="/static/memory.css">
+</head>
+<body>
+  <div class="shell">
+    <aside id="conversation-sidebar" class="sidebar" aria-label="Conversation history">
+      <div class="brand"><span class="brand-mark">e</span><div><b>English tutor</b><small>Private · local-first</small></div></div>
+      <button id="new-session" class="new-session">＋ &nbsp;New conversation</button>
+      <button id="audio-settings-open" class="new-session">⚙ &nbsp;Voice settings</button>
+      <button id="memory-open" class="new-session memory-button">◇ &nbsp;Learner memory</button>
+      <div class="side-label">YOUR CONVERSATIONS</div>
+      <nav id="sessions" class="sessions"></nav>
+      <div class="sidebar-foot"><span class="local-dot"></span><span>Runs on this computer</span></div>
+    </aside>
+    <main>
+      <header class="topbar"><button id="menu-toggle" class="icon-button" aria-label="Toggle conversation sidebar" aria-controls="conversation-sidebar" aria-expanded="true">☰</button><div class="top-title">Speaking practice <span class="privacy-pill">LOCAL SESSION</span></div><button id="diagnostics-open" class="icon-button" title="Diagnostics" aria-label="Open diagnostics">⚙</button></header>
+      <section class="practice">
+        <div class="welcome" id="welcome"><div class="orb"><span>e</span></div><p class="eyebrow">YOUR ENGLISH PRACTICE SPACE</p><h1>Let's have a conversation.</h1><p class="welcome-copy">Speak naturally, or type a message. Your sessions stay on this computer.</p><div class="suggestions"><button class="suggestion">Help me practise small talk</button><button class="suggestion">Let's talk about my day</button><button class="suggestion">Practise a job interview</button></div></div>
+        <div id="messages" class="messages" aria-live="polite"></div>
+        <div id="status" class="status" role="status"><span class="status-dot"></span><span id="status-text">Ready when you are</span></div>
+      </section>
+      <footer class="composer-wrap"><form id="composer" class="composer"><textarea id="message-input" rows="1" placeholder="Write or start speaking…" aria-label="Message the tutor"></textarea><button type="button" id="mic" class="mic-button" title="Start hands-free voice practice" aria-label="Start voice practice"><span>●</span></button><button type="submit" id="send" class="send-button" aria-label="Send message">↑</button></form><div class="composer-note"><span>Enter to send · Shift + Enter for a new line</span><span>Whisper · Qwen · Kokoro</span></div></footer>
+    </main>
+  </div>
+  <dialog id="diagnostics"><div class="dialog-head"><div><small>LOCAL SYSTEM</small><h2>Diagnostics</h2></div><button id="close-dialog" class="icon-button" aria-label="Close diagnostics">×</button></div><p class="dialog-intro">Model and device status. No conversation text or audio is included.</p><pre id="diagnostic-data">Checking…</pre></dialog>
+  <dialog id="audio-settings"><div class="dialog-head"><div><small>LOCAL AUDIO CONTROLS</small><h2>Voice settings</h2></div><button id="close-audio-settings" class="icon-button" aria-label="Close voice settings">×</button></div><p class="dialog-intro">The mic meter shows input level and speech trigger. Speech ends after the selected continuous-silence interval. Lower noise-margin values detect quieter speech relative to your room noise.</p><label class="setting-row" for="silence-duration">End-of-turn silence<select id="silence-duration"><option value="2">2 seconds</option><option value="2.5">2.5 seconds</option><option value="3" selected>3 seconds</option><option value="3.5">3.5 seconds</option><option value="4">4 seconds</option><option value="5">5 seconds</option></select></label><label class="setting-row" for="voice-sensitivity">Noise margin <span id="sensitivity-value">4.60×</span><input id="voice-sensitivity" type="range" min="0.004" max="0.03" step="0.001" value="0.03"></label><label class="setting-row" for="audio-input">Microphone<select id="audio-input"><option value="">System default microphone</option></select></label><label class="setting-row" for="audio-output">Speaker<select id="audio-output"><option value="">System default speaker</option></select></label><label class="setting-row setting-check" for="voice-output"><span>Speak tutor replies aloud</span><input id="voice-output" type="checkbox" checked></label><p id="audio-device-note" class="dialog-intro" aria-live="polite">Audio devices are listed after microphone permission is granted.</p></dialog>
+  <dialog id="memory-dialog"><div class="dialog-head"><div><small>YOUR PERSISTENT MEMORY</small><h2>Learner memory</h2></div><button id="close-memory" class="icon-button" aria-label="Close memory">×</button></div><p class="dialog-intro">Review stored conversation details. Remove an item any time.</p><input id="memory-search" class="memory-search" type="search" placeholder="Search remembered conversations" aria-label="Search learner memory"><div id="memory-items" class="memory-items"></div></dialog>
+  <script src="/static/voice.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

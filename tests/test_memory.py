@@ -42,6 +42,15 @@ class ConversationMemoryTests(unittest.TestCase):
 
             self.assertEqual(memory.search("Describe a volcano eruption", limit=3), [])
 
+    def test_memory_review_and_delete(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as directory:
+            memory = ConversationMemory(Path(directory) / "memory.sqlite3")
+            item_id = memory.add("I enjoy cycling.", "That sounds fun.")
+            self.assertEqual(memory.recent(5)[0]["id"], item_id)
+            self.assertTrue(memory.delete(item_id))
+            self.assertEqual(memory.recent(5), [])
+            self.assertFalse(memory.delete(item_id))
+
 
 if __name__ == "__main__":
     unittest.main()

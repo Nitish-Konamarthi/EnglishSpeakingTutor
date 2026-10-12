@@ -1,0 +1,16 @@
+{
+  "model": "sentence-transformers/all-MiniLM-L6-v2",
+  "device": "CPU",
+  "index": "sqlite-vec cosine + SQLite FTS5 + reciprocal rank fusion",
+  "fixture": "tests\\fixtures\\retrieval_eval.json",
+  "query_count": 5,
+  "recall_at_3": 1.0,
+  "hits_at_3": 5,
+  "mean_query_latency_ms": 31.51,
+  "python": "3.12.10",
+  "platform": "Windows-11-10.0.26300-SP0",
+  "reranker": {
+    "enabled": false,
+    "reason": "No cross-encoder comparison is justified by this five-query fixture."
+  }
+}

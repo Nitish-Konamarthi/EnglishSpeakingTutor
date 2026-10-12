@@ -32,6 +32,7 @@ logs/
 *.sqlite3
 
 # Downloaded LLM and speech model weights
+models/embeddings/
 *.gguf
 *.safetensors
 *.ckpt
