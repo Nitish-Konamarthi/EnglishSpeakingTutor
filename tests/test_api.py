@@ -27,12 +27,16 @@ def test_text_turn_persists_and_returns_spoken_text(monkeypatch):
     with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as directory:
         monkeypatch.setattr(main, "DATA", Path(directory))
         monkeypatch.setenv("TUTOR_NEURAL_MEMORY", "0")
+        memory = None
+        session_id = None
         with TestClient(main.app) as client:
             fake_llm = FakeLLM()
             client.app.state.llm = fake_llm
+            memory = client.app.state.memory
             assert "English Speaking Tutor" in client.get("/").text
             assert "getUserMedia" in client.get("/static/app.js").text
             session = client.post("/api/v1/sessions").json()
+            session_id = session["id"]
             body = {"text": "I enjoy to cycle.", "client_turn_id": "turn-1"}
             response = client.post(f"/api/v1/sessions/{session['id']}/turns", json=body)
             replay = client.post(f"/api/v1/sessions/{session['id']}/turns", json=body)
@@ -41,6 +45,9 @@ def test_text_turn_persists_and_returns_spoken_text(monkeypatch):
             assert fake_llm.calls == 1
             saved = client.get(f"/api/v1/sessions/{session['id']}").json()["messages"]
             assert [item["role"] for item in saved] == ["user", "assistant"]
+        assert memory is not None and session_id is not None
+        indexed = memory.recent(1)[0]
+        assert indexed["source_session_id"] == session_id
 
 
 def test_user_message_is_saved_when_local_llm_is_offline(monkeypatch):
@@ -66,9 +73,41 @@ def test_user_message_is_saved_when_local_llm_is_offline(monkeypatch):
             assert messages[0]["content"] == "Please remember this message."
 
 
+def test_deleting_session_removes_only_its_linked_memories(monkeypatch):
+    with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as directory:
+        monkeypatch.setattr(main, "DATA", Path(directory))
+        monkeypatch.setenv("TUTOR_NEURAL_MEMORY", "0")
+        with TestClient(main.app) as client:
+            session = client.post("/api/v1/sessions").json()
+            other_session = client.post("/api/v1/sessions").json()
+            memory = client.app.state.memory
+            linked_id = memory.add("I like hiking.", "You enjoy hiking.", session["id"])
+            other_id = memory.add("I like swimming.", "You enjoy swimming.", other_session["id"])
+            legacy_id = memory.add("I like reading.", "You enjoy reading.")
+
+            response = client.delete(f"/api/v1/sessions/{session['id']}")
+
+            assert response.status_code == 200
+            assert response.json() == {"deleted": True, "memories_deleted": 1}
+            assert client.get(f"/api/v1/sessions/{session['id']}").status_code == 404
+            remaining_ids = {item["id"] for item in memory.recent(10)}
+            assert remaining_ids == {other_id, legacy_id}
+            assert linked_id not in remaining_ids
+
+
 def test_speech_text_normalizes_markdown():
     assert main.clean_text_for_speech("**Hello**, [friend](https://local.test). `Great`!") == "Hello, friend. Great!"
     assert main.clean_text_for_speech("Visit https://example.com now.") == "Visit link omitted now."
+
+
+def test_speech_text_expands_abbreviations_and_normalizes_symbol_punctuation():
+    assert main.clean_text_for_speech("Use **e.g.** apples; pears: fresh, ripe.") == (
+        "Use for example apples, pears, fresh, ripe."
+    )
+    assert main.clean_text_for_speech("Tea & coffee, i.e. both, etc.") == (
+        "Tea and coffee, that is both, and so on"
+    )
+    assert main.clean_text_for_speech("Meet me at 10:30 tomorrow.") == "Meet me at 10:30 tomorrow."
 
 
 def test_sentence_splitter_keeps_complete_prose_chunks():

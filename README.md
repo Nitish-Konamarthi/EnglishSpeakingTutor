@@ -21,11 +21,11 @@ The existing terminal prototype remains available as `.\run_tutor.ps1`.
 
 ## What works in this build
 
-- Browser text conversation, a responsive local UI, and a review/search/delete panel for persisted conversation memories.
-- Persistent sessions and complete user/assistant messages in `data/tutor.sqlite3`.
+- Browser text conversation, a responsive local UI, and a review/search/delete panel for persisted conversation memories. Each chat can also be deleted from its sidebar row; memories linked to that chat are removed with it.
+- Persistent sessions and complete user/assistant messages in `data/tutor.sqlite3`. A new browser tab starts a fresh conversation; refreshing a tab restores its current conversation, and previous chats remain available in the sidebar.
 - Text and microphone input. The browser calibrates the room noise for 750 ms on startup, then applies an RMS speech detector with 250 ms steady-state pre-roll, a 250 ms sustained onset check, and three seconds of continuous silence before finalizing. A longer initial buffer preserves speech that begins during calibration. The default adaptive noise margin is 0.03 (at least 0.045 RMS, or about 4.6× over the calibrated floor); the versioned setting resets prior lower browser preferences. The live status reports mic level, calibrated floor, speech trigger, silence countdown, and capture errors. The user-adjustable noise margin trades quiet-speech detection against room-noise rejection. Completed turns are sent as 16 kHz WAV to Whisper small on CPU. The detector retains at most 90 seconds per segment and then starts a fresh segment if speech continues.
 - Manual stop finalizes and submits buffered speech rather than clearing it. Empty and very short utterances are ignored. The microphone stays active between turns; detected speech stops current playback promptly and captures the new utterance. Browser echo cancellation is requested, but speaker playback may still leak into the microphone; headphones improve isolation.
-- Kokoro `af_heart` CPU speech for voice turns, with ordered sentence-sized WAV chunks streamed to the browser as each is synthesized. Playback can start before later sentences finish. LLM text generation still completes before TTS begins; there is no token streaming.
+- Kokoro `af_heart` CPU speech for voice turns, with Markdown cleanup, common abbreviation expansion (for example, `e.g.` becomes “for example”), and ordered sentence-sized WAV chunks streamed to the browser as each is synthesized. Playback can start before later sentences finish. LLM text generation still completes before TTS begins; there is no token streaming.
 - Local Qwen chat through the existing OpenAI-compatible sidecar. The learner message is saved before inference, so a sidecar failure does not lose it.
 - Neural `sentence-transformers/all-MiniLM-L6-v2` embeddings on CPU, SQLite FTS5 plus `sqlite-vec` cosine search, and rank fusion. Existing feature-hash memories are re-embedded at app startup when the local model cache is present.
 - A bounded background queue for durable episode-memory indexing.
@@ -48,6 +48,7 @@ The checked-in retrieval fixture currently has five labelled paraphrase queries.
 
 - Sessions/messages: `data/tutor.sqlite3`.
 - Conversation retrieval index: `data/conversation_memory.sqlite3`.
+- Existing memory entries without a source chat remain unlinked and are preserved when a chat is deleted; new entries are chat-linked.
 - ASR and embedding weights: `models/`.
 - Audio: microphone audio is processed in memory and is not retained by the web app. The terminal prototype supports optional WAV retention with `TUTOR_RETAIN_AUDIO=1`.
 - Database backups: stop the app and copy the two SQLite files. To clear history and memory, stop the app and remove those two files.

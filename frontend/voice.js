@@ -129,9 +129,21 @@
     }
   }
 
+  function assembleManualCapture(frames, sampleRate) {
+    const sampleCount = frames.reduce((total, frame) => total + frame.length, 0);
+    if (sampleCount < sampleRate * 0.25) return null;
+    const samples = new Float32Array(sampleCount);
+    let offset = 0;
+    for (const frame of frames) {
+      samples.set(frame, offset);
+      offset += frame.length;
+    }
+    return samples;
+  }
+
   function shouldSpeakReply({ pendingBargeIn = false, queuedTurns = 0, speechActive = false } = {}) {
     return !pendingBargeIn && queuedTurns === 0 && !speechActive;
   }
 
-  return { VoiceTurnDetector, shouldSpeakReply };
+  return { VoiceTurnDetector, assembleManualCapture, shouldSpeakReply };
 });

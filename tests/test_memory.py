@@ -51,6 +51,18 @@ class ConversationMemoryTests(unittest.TestCase):
             self.assertEqual(memory.recent(5), [])
             self.assertFalse(memory.delete(item_id))
 
+    def test_delete_session_memories_preserves_other_and_legacy_memories(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as directory:
+            memory = ConversationMemory(Path(directory) / "memory.sqlite3")
+            owned_id = memory.add("I like hiking.", "You enjoy hiking.", "session-one")
+            other_id = memory.add("I like swimming.", "You enjoy swimming.", "session-two")
+            legacy_id = memory.add("I like reading.", "You enjoy reading.")
+
+            self.assertEqual(memory.delete_for_session("session-one"), 1)
+            remaining_ids = {item["id"] for item in memory.recent(10)}
+            self.assertNotIn(owned_id, remaining_ids)
+            self.assertEqual(remaining_ids, {other_id, legacy_id})
+
 
 if __name__ == "__main__":
     unittest.main()

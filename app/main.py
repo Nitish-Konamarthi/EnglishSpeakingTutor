@@ -56,7 +56,15 @@ def clean_text_for_speech(text: str) -> str:
     text = re.sub(r"\*\*(.*?)\*\*|__(.*?)__", lambda m: m.group(1) or m.group(2), text)
     text = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)|(?<!_)_([^_]+)_(?!_)", lambda m: m.group(1) or m.group(2), text)
     text = re.sub(r"(?m)^\s*[-+]\s+|^\s*\d+[.)]\s+", "", text)
-    return re.sub(r"[*_~#]", "", text).strip()
+    text = re.sub(r"\be\.g\.(?=\s|[,;:!?)]|$)", "for example", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bi\.e\.(?=\s|[,;:!?)]|$)", "that is", text, flags=re.IGNORECASE)
+    text = re.sub(r"\betc\.(?=\s|[,;:!?)]|$)", "and so on", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bvs\.(?=\s|[,;:!?)]|$)", "versus", text, flags=re.IGNORECASE)
+    text = text.replace("&", " and ")
+    text = re.sub(r"\s*;\s*", ", ", text)
+    text = re.sub(r"(?<!\d):(?=\s|$)", ",", text)
+    text = re.sub(r"[*_~#]", "", text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def split_speech_sentences(text: str) -> list[str]:
@@ -89,7 +97,10 @@ async def lifespan(app: FastAPI):
     app.state.tts_pipeline = None
     app.state.model_lock = threading.Lock()
     app.state.memory_queue = asyncio.Queue(maxsize=256)
-    app.state.memory_worker = asyncio.create_task(_memory_worker(app.state.memory_queue, app.state.memory))
+    app.state.memory_lock = threading.RLock()
+    app.state.memory_worker = asyncio.create_task(
+        _memory_worker(app.state.memory_queue, app.state.memory, app.state.store, app.state.memory_lock)
+    )
     yield
     await app.state.memory_queue.join()
     app.state.memory_worker.cancel()
@@ -99,11 +110,16 @@ async def lifespan(app: FastAPI):
         pass
 
 
-async def _memory_worker(queue: asyncio.Queue, memory: ConversationMemory):
+async def _memory_worker(queue: asyncio.Queue, memory: ConversationMemory, store: SessionStore, memory_lock):
     while True:
-        user_text, assistant_text = await queue.get()
+        session_id, user_text, assistant_text = await queue.get()
         try:
-            await asyncio.to_thread(memory.add, user_text, assistant_text)
+            def index_if_session_exists():
+                with memory_lock:
+                    if store.get_session(session_id):
+                        memory.add(user_text, assistant_text, source_session_id=session_id)
+
+            await asyncio.to_thread(index_if_session_exists)
         except Exception:
             LOGGER.exception("Background memory indexing failed")
         finally:
@@ -174,10 +190,21 @@ async def get_session(session_id: str, request: Request):
 
 @app.delete("/api/v1/sessions/{session_id}")
 async def delete_session(session_id: str, request: Request):
-    store, _, _ = services(request)
-    if not store.delete_session(session_id):
+    store, memory, _ = services(request)
+
+    def delete_session_and_memories():
+        with request.app.state.memory_lock:
+            if not store.get_session(session_id):
+                return None
+            deleted_memories = memory.delete_for_session(session_id)
+            if not store.delete_session(session_id):
+                return None
+            return deleted_memories
+
+    deleted_memories = await asyncio.to_thread(delete_session_and_memories)
+    if deleted_memories is None:
         raise HTTPException(404, "Session not found")
-    return {"deleted": True}
+    return {"deleted": True, "memories_deleted": deleted_memories}
 
 
 @app.get("/api/v1/memories")
@@ -231,7 +258,7 @@ async def process_turn(session_id: str, text: str, client_turn_id: str, store, m
         raise HTTPException(503, f"Your message was saved, but the local model is unavailable: {exc}") from exc
     store.add_message(session_id, "assistant", answer, client_turn_id)
     try:
-        memory_queue.put_nowait((text, answer))
+        memory_queue.put_nowait((session_id, text, answer))
     except asyncio.QueueFull:
         LOGGER.error("Background memory queue is full; this completed turn remains in the session store but was not indexed")
     return {"user_text": text, "assistant_text": answer, "speech_text": clean_text_for_speech(answer), "client_turn_id": client_turn_id, "latency_seconds": round(time.perf_counter() - started, 3)}
