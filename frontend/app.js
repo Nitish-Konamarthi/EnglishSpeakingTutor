@@ -1,16 +1,43 @@
 const $ = (q) => document.querySelector(q);
-const state = { session: null, busy: false, textTurn: false, voiceQueueRunning: false, pendingSocketTurn: null, pendingBargeIn: false, stream: null, audioContext: null, processor: null, detector: null, startingMic: false, micRequest: 0, lastAudioFrameAt: 0, lastLevelStatusAt: 0, captureWatchdog: null, player: null, playerUrl: null, playbackController: null, playbackId: 0, playbackQueue: [], playbackSpaceResolvers: [], playbackDrainResolvers: [], voiceQueue: [], turnEpoch: 0 };
+const currentSessionKey = 'tutor_current_session_id';
+const state = { session: null, busy: false, textTurn: false, voiceQueueRunning: false, pendingSocketTurn: null, pendingBargeIn: false, stream: null, audioContext: null, processor: null, detector: null, captureFrames: [], captureFrameLimit: 0, startingMic: false, micRequest: 0, lastAudioFrameAt: 0, lastLevelStatusAt: 0, captureWatchdog: null, player: null, playerUrl: null, playbackController: null, playbackId: 0, playbackQueue: [], playbackSpaceResolvers: [], playbackDrainResolvers: [], voiceQueue: [], turnEpoch: 0 };
 const status = (label, mode='') => { $('#status-text').textContent = label; $('#status').className = `status ${mode}`; };
-async function api(path, options={}) { const response = await fetch(path, options); const data = await response.json().catch(()=>({})); if(!response.ok) throw new Error(data.detail || `Request failed (${response.status})`); return data; }
+async function api(path, options={}) { const response = await fetch(path, options); const data = await response.json().catch(()=>({})); if(!response.ok){const error=new Error(data.detail||`Request failed (${response.status})`);error.status=response.status;throw error;} return data; }
 function bubble(role, text) { $('#welcome').hidden = true; const row=document.createElement('div'); row.className=`message ${role}`; const avatar=document.createElement('div'); avatar.className='avatar'; avatar.textContent=role==='assistant'?'e':'YOU'; const body=document.createElement('div'); body.className='bubble'; body.textContent=text; row.append(avatar,body); $('#messages').append(row); $('#messages').scrollTop=$('#messages').scrollHeight; return row; }
 function renderMessages(messages) { $('#messages').replaceChildren(); if(!messages.length) $('#welcome').hidden=false; else { $('#welcome').hidden=true; messages.forEach(m=>bubble(m.role,m.content)); } }
-async function refreshSessions() { const {sessions}=await api('/api/v1/sessions'); const nav=$('#sessions'); nav.replaceChildren(); sessions.forEach(s=>{const b=document.createElement('button');b.className=`session-item ${s.id===state.session?'active':''}`;b.textContent=s.title;b.onclick=()=>openSession(s.id);nav.append(b);}); }
+async function refreshSessions() {
+ const {sessions}=await api('/api/v1/sessions'),nav=$('#sessions');
+ nav.replaceChildren();
+ sessions.forEach(session=>{
+  const row=document.createElement('div');row.className='session-row';
+  const open=document.createElement('button');open.type='button';open.className=`session-item ${session.id===state.session?'active':''}`;open.textContent=session.title;open.onclick=()=>openSession(session.id);
+  const remove=document.createElement('button');remove.type='button';remove.className='session-delete';remove.textContent='×';remove.title='Delete conversation';remove.setAttribute('aria-label',`Delete conversation: ${session.title}`);remove.onclick=()=>deleteSession(session.id,session.title);
+  row.append(open,remove);nav.append(row);
+ });
+}
+async function deleteSession(id,title) {
+ if(id===state.session&&(state.busy||state.stream||state.startingMic)){status('Stop voice practice and finish the current turn before deleting this conversation.','error');return;}
+ if(!confirm(`Delete “${title}” and its linked learner-memory entries? This cannot be undone.`))return;
+ try{
+  const result=await api(`/api/v1/sessions/${id}`,{method:'DELETE'});
+  if(id===state.session){
+    sessionStorage.removeItem(currentSessionKey);
+   state.turnEpoch++;interruptPlayback();
+   if(state.socket){state.socket.close();state.socket=null;}
+   state.session=null;state.pendingSocketTurn=null;state.busy=false;state.textTurn=false;
+   const {sessions}=await api('/api/v1/sessions');
+   if(sessions.length)await openSession(sessions[0].id);else await newSession();
+  }else await refreshSessions();
+  const count=result.memories_deleted||0;
+  status(`Conversation deleted; ${count} linked learner-memory ${count===1?'entry':'entries'} removed.`);
+ }catch(error){status(error.message,'error');}
+}
 async function openSession(id) {
  if(state.busy||state.stream||state.startingMic){status('Stop voice practice and finish the current turn before changing conversations.','error');return;}
  if(matchMedia('(max-width:700px)').matches){$('.sidebar').classList.remove('open');$('#menu-toggle').setAttribute('aria-expanded','false');}
  state.turnEpoch++;
  interruptPlayback();
- if(state.socket)state.socket.close();state.session=id;
+ if(state.socket)state.socket.close();state.session=id;sessionStorage.setItem(currentSessionKey,id);
  const data=await api(`/api/v1/sessions/${id}`);renderMessages(data.messages);await refreshSessions();
  const scheme=location.protocol==='https:'?'wss':'ws',socket=new WebSocket(`${scheme}://${location.host}/api/v1/ws/${id}`);state.socket=socket;
  socket.onopen=()=>{if(state.socket===socket)status('Ready when you are');};
@@ -71,43 +98,49 @@ async function startMic() {
   const selectedInput=localStorage.getItem('tutor_audio_input')||'';
   const audioConstraints={channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true};
   if(selectedInput)audioConstraints.deviceId={exact:selectedInput};
-    let stream;
-    try{stream=await navigator.mediaDevices.getUserMedia({audio:audioConstraints});}
-    catch(error){
-     if(!selectedInput||!['NotFoundError','OverconstrainedError'].includes(error.name))throw error;
-     localStorage.removeItem('tutor_audio_input');
-     delete audioConstraints.deviceId;
-     status('Saved microphone unavailable; trying the system default…','busy');
-     stream=await navigator.mediaDevices.getUserMedia({audio:audioConstraints});
-    }
+  let stream;
+  try{stream=await navigator.mediaDevices.getUserMedia({audio:audioConstraints});}
+  catch(error){
+   if(!selectedInput||!['NotFoundError','OverconstrainedError'].includes(error.name))throw error;
+   localStorage.removeItem('tutor_audio_input');
+   delete audioConstraints.deviceId;
+   status('Saved microphone unavailable; trying the system default…','busy');
+   stream=await navigator.mediaDevices.getUserMedia({audio:audioConstraints});
+  }
   if(request!==state.micRequest){stream.getTracks().forEach(track=>track.stop());return;}
   state.stream=stream;
   const context=new AudioContext();state.audioContext=context;await context.resume();
   if(context.state!=='running')throw new Error(`Audio capture is ${context.state}; click Start again to resume microphone access.`);
   if(request!==state.micRequest){stream.getTracks().forEach(track=>track.stop());context.close().catch(()=>{});return;}
   const source=context.createMediaStreamSource(stream),processor=context.createScriptProcessor(2048,1,1);
-  state.stream=stream;state.audioContext=context;state.processor=processor;state.lastAudioFrameAt=performance.now();
+  state.stream=stream;state.audioContext=context;state.processor=processor;state.captureFrames=[];state.captureFrameLimit=Math.ceil(90*context.sampleRate/2048);state.lastAudioFrameAt=performance.now();
   state.detector=new VoiceCapture.VoiceTurnDetector({
    threshold:Number(localStorage.getItem('tutor_vad_threshold_v5'))||0.03,
    silenceSeconds:Number(localStorage.getItem('tutor_silence_seconds'))||3,
    sampleRate:context.sampleRate,
    onSpeechStart:()=>{if(state.busy)state.pendingBargeIn=true;if(state.textTurn&&state.socket?.readyState===WebSocket.OPEN)state.socket.send(JSON.stringify({type:'cancel'}));if(state.playbackController||state.player||state.playbackQueue.length){interruptPlayback();status('Interrupted · capturing your reply…','busy');}else status('Speech detected · listening for the end of your turn','busy');},
-   onLevel:level=>{state.lastAudioFrameAt=performance.now();const now=state.lastAudioFrameAt;if(now-state.lastLevelStatusAt<300)return;state.lastLevelStatusAt=now;const volume=level.rms.toFixed(3),floor=Number(level.noiseFloor||0).toFixed(3),cutoff=Number(level.threshold||0).toFixed(3);if(level.calibrating){status(`Calibrating microphone · input level ${volume}`,'busy');return;}if(level.active){const meter=`mic ${volume} · room ${floor} · quiet below ${cutoff}`;status(level.voiced?`Speech detected · ${meter}`:`Quiet · ${meter} · sending in ${Math.max(0,level.endpointSeconds-level.silenceSeconds).toFixed(1)} s`,level.voiced?'busy':'');}else status(`Microphone active · waiting for speech (level ${volume}, trigger ${cutoff})`);},
-   onUtterance:(samples)=>{const wav=encodeWav(samples,context.sampleRate);submitVoice(wav);}
+    onLevel:level=>{state.lastAudioFrameAt=performance.now();const now=state.lastAudioFrameAt;if(now-state.lastLevelStatusAt<300)return;state.lastLevelStatusAt=now;const volume=level.rms.toFixed(3),floor=Number(level.noiseFloor||0).toFixed(3),cutoff=Number(level.threshold||0).toFixed(3);if(level.calibrating){status(`Calibrating microphone · input level ${volume}`,'busy');return;}if(level.active){const meter=`mic ${volume} · room ${floor} · quiet below ${cutoff}`;status(level.voiced?`Speech detected · ${meter}`:`Quiet · ${meter} · sending in ${Math.max(0,level.endpointSeconds-level.silenceSeconds).toFixed(1)} s`,level.voiced?'busy':'');}else status(`Listening for speech · mic ${volume} · trigger ${cutoff}`);},
+  onUtterance:(samples)=>{state.captureFrames=[];const wav=encodeWav(samples,context.sampleRate);submitVoice(wav);}
   });
-  processor.onaudioprocess=e=>{e.outputBuffer.getChannelData(0).fill(0);if(!state.detector)return;const elapsed=e.inputBuffer.length/context.sampleRate;state.detector.push(e.inputBuffer.getChannelData(0),elapsed);};
+  processor.onaudioprocess=e=>{e.outputBuffer.getChannelData(0).fill(0);if(!state.detector)return;const frame=e.inputBuffer.getChannelData(0);state.captureFrames.push(new Float32Array(frame));if(state.captureFrames.length>state.captureFrameLimit)state.captureFrames.shift();const elapsed=e.inputBuffer.length/context.sampleRate;state.detector.push(frame,elapsed);};
   source.connect(processor);processor.connect(context.destination);
   stream.getAudioTracks().forEach(track=>track.addEventListener('ended',()=>{if(state.stream===stream){stopMic(false);status('Microphone disconnected. Reconnect it and start voice practice again.','error');}}));
   state.captureWatchdog=setInterval(()=>{if(state.stream&&performance.now()-state.lastAudioFrameAt>5000){stopMic(false);status('Microphone capture stopped unexpectedly. Check the selected input device and try again.','error');}},1500);
-  state.startingMic=false;$('#mic').classList.add('active');$('#mic').textContent='■';$('#mic').setAttribute('aria-label','Stop voice practice and send the current utterance');status('Microphone active · waiting for speech');
+  state.startingMic=false;$('#mic').classList.add('active');$('#mic').textContent='■';$('#mic').setAttribute('aria-label','Stop voice practice and send the current utterance');status('Listening for speech…','busy');
  }catch(e){if(request!==state.micRequest)return;state.startingMic=false;stopMic(false);status(`Microphone unavailable: ${e.message}`,'error');}
 }
 function stopMic(finalize=true){
  if(state.startingMic&&!state.stream){state.micRequest++;state.startingMic=false;status('Microphone start cancelled');return;}
  const context=state.audioContext;
  const hadSpeech=Boolean(state.detector?.active);
+ const hadCaptureFrames=state.captureFrames.length>0;
  if(finalize&&hadSpeech)status('Finalizing your recording…','busy');
- const submitted=finalize&&state.detector?.finalize('manual-stop');
+ let submitted=finalize&&state.detector?.finalize('manual-stop');
+ if(finalize&&!submitted&&context){
+  const samples=VoiceCapture.assembleManualCapture(state.captureFrames,context.sampleRate);
+  if(samples){submitVoice(encodeWav(samples,context.sampleRate));submitted=true;}
+ }
+ state.captureFrames=[];
  if(submitted)status('Transcribing…','busy');
  state.detector=null;
  if(state.captureWatchdog){clearInterval(state.captureWatchdog);state.captureWatchdog=null;}
@@ -117,6 +150,8 @@ function stopMic(finalize=true){
  interruptPlayback();
  $('#mic').classList.remove('active');$('#mic').textContent='●';$('#mic').setAttribute('aria-label','Start voice practice');
  if(hadSpeech&&!submitted)status('That recording was too short to transcribe. Speak for at least a quarter second and try again.','error');
+ else if(finalize&&!submitted&&!hadCaptureFrames)status('No microphone audio frames were captured. Check the selected microphone and try again.','error');
+ else if(finalize&&!submitted&&hadCaptureFrames)status('That recording was too short to transcribe. Speak for at least a quarter second and try again.','error');
  else if(!state.busy)status('Voice practice stopped');
 }
 function releasePlaybackWaiters(){for(const resolve of state.playbackSpaceResolvers.splice(0))resolve();if(!state.player&&!state.playbackQueue.length)for(const resolve of state.playbackDrainResolvers.splice(0))resolve();}
@@ -189,4 +224,13 @@ async function processVoiceQueue(){
 }
 $('#mic').onclick=()=>{if(state.stream||state.startingMic)stopMic();else startMic();};
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&(state.playbackController||state.player||state.playbackQueue.length)){interruptPlayback();status('Speech interrupted');}if(e.key==='Escape'&&state.busy&&state.socket&&state.socket.readyState===WebSocket.OPEN){state.socket.send(JSON.stringify({type:'cancel'}));status('Cancelling response…','busy');}});
-(async()=>{try{const list=await api('/api/v1/sessions');if(list.sessions.length)await openSession(list.sessions[0].id);else await newSession();}catch(e){status(`App startup error: ${e.message}`,'error');}})();
+(async()=>{
+ try{
+  const savedSession=sessionStorage.getItem(currentSessionKey);
+  if(savedSession){
+   try{await openSession(savedSession);return;}
+   catch(error){if(error.status!==404)throw error;sessionStorage.removeItem(currentSessionKey);}
+  }
+  await newSession();
+ }catch(e){status(`App startup error: ${e.message}`,'error');}
+})();

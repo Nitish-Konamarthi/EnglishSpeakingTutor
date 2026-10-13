@@ -1,11 +1,13 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const { VoiceTurnDetector, shouldSpeakReply } = require('../frontend/voice.js');
+const { VoiceTurnDetector, assembleManualCapture, shouldSpeakReply } = require('../frontend/voice.js');
 
 // Script startup must not abort before the mic handlers are registered due to
 // missing voice-settings controls in the served HTML.
 {
   const html = fs.readFileSync(require.resolve('../frontend/index.html'), 'utf8');
+  assert.match(html, /href="\/static\/style\.css\?v=\d+"/,
+    'the main stylesheet URL must be versioned so sidebar fixes are not hidden by browser cache');
   for (const id of ['audio-settings', 'close-audio-settings', 'silence-duration', 'sensitivity-value',
     'voice-sensitivity', 'audio-input', 'audio-output', 'voice-output', 'audio-device-note']) {
     assert.match(html, new RegExp(`id=["']${id}["']`), `index.html must include #${id}`);
@@ -22,6 +24,17 @@ const { VoiceTurnDetector, shouldSpeakReply } = require('../frontend/voice.js');
   assert.match(fs.readFileSync(require.resolve('../frontend/style.css'), 'utf8'),
     /#menu-toggle\{position:relative;z-index:5/,
     'the mobile menu toggle must remain above the open sidebar');
+  assert.match(app, /assembleManualCapture\(state\.captureFrames,context\.sampleRate\)/,
+    'manual stop must submit buffered input when speech detection did not activate');
+  assert.match(app, /async function deleteSession\(/,
+    'the session list must provide direct conversation deletion');
+  assert.match(app, /sessionStorage\.getItem\(currentSessionKey\)/,
+    'startup must reuse the current tab conversation after a reload');
+  assert.match(app, /error\.status!==404/,
+    'startup must not create another conversation when loading fails for a non-404 reason');
+  assert.match(fs.readFileSync(require.resolve('../frontend/style.css'), 'utf8'),
+    /#sessions \.session-row\{display:grid;grid-template-columns:minmax\(0,1fr\) 28px;gap:2px;width:100%\}/,
+    'sidebar rows must fill the nav width with a stable delete action column');
 }
 
 const rate = 48000;
@@ -78,6 +91,20 @@ function makeDetector(options = {}) {
   assert.equal(test.turns[0].reason, 'manual-stop');
   assert.ok(test.turns[0].samples.length >= 20 * frameSize);
   assert.equal(test.detector.finalize('manual-stop'), false);
+}
+
+// Manually stopped audio is still transcribed when its level stayed below the
+// automatic speech trigger; captures shorter than the API minimum are ignored.
+{
+  const test = makeDetector();
+  const quietSpeech = new Float32Array(frameSize).fill(0.02);
+  const frames = Array.from({ length: 8 }, () => quietSpeech);
+  for (const frame of frames) test.detector.push(frame, frameSeconds);
+  assert.equal(test.detector.active, false, 'quiet speech may stay below the automatic trigger');
+  const captured = assembleManualCapture(frames, rate);
+  assert.equal(captured.length, frameSize * frames.length);
+  assert.equal(assembleManualCapture(frames.slice(0, 5), rate), null,
+    'manual fallback must respect the 250 ms minimum capture duration');
 }
 
 // Noise below the configured threshold and recordings shorter than 250 ms are
@@ -210,4 +237,4 @@ function makeDetector(options = {}) {
   assert.equal(detector.active, true, 'clear speech must cross the higher default threshold');
 }
 
-console.log('9 frontend voice lifecycle checks passed');
+console.log('Frontend voice lifecycle checks passed');

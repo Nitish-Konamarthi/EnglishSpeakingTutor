@@ -84,12 +84,16 @@ class ConversationMemory:
                     assistant_text TEXT NOT NULL,
                     embedding TEXT NOT NULL,
                     embedding_model TEXT NOT NULL DEFAULT 'feature-hash-v1',
-                    created_at REAL NOT NULL
+                    created_at REAL NOT NULL,
+                    source_session_id TEXT
                 )"""
             )
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(memories)")}
             if "embedding_model" not in columns:
                 connection.execute("ALTER TABLE memories ADD COLUMN embedding_model TEXT NOT NULL DEFAULT 'feature-hash-v1'")
+            if "source_session_id" not in columns:
+                connection.execute("ALTER TABLE memories ADD COLUMN source_session_id TEXT")
+            connection.execute("CREATE INDEX IF NOT EXISTS memories_source_session ON memories(source_session_id)")
             connection.execute(
                 """CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
                     user_text, assistant_text,
@@ -145,15 +149,15 @@ class ConversationMemory:
         finally:
             connection.close()
 
-    def add(self, user_text: str, assistant_text: str) -> int:
+    def add(self, user_text: str, assistant_text: str, source_session_id: str | None = None) -> int:
         """Persist one completed tutor exchange and its search vector."""
         text = f"Learner: {user_text}\nTutor: {assistant_text}"
         vector = self.embedder.encode([text])[0] if self.embedder else embed_text(text, self.dimensions)
         with self._connect() as connection:
             cursor = connection.execute(
-                "INSERT INTO memories(user_text, assistant_text, embedding, embedding_model, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (user_text, assistant_text, json.dumps(vector), self.embedding_model, time.time()),
+                "INSERT INTO memories(user_text, assistant_text, embedding, embedding_model, created_at, source_session_id) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (user_text, assistant_text, json.dumps(vector), self.embedding_model, time.time(), source_session_id),
             )
             memory_id = int(cursor.lastrowid)
             if self.vector_index:
@@ -271,7 +275,7 @@ class ConversationMemory:
     def recent(self, limit: int = 50) -> list[dict[str, Any]]:
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT id,user_text,assistant_text,embedding_model,created_at FROM memories ORDER BY id DESC LIMIT ?",
+                "SELECT id,user_text,assistant_text,embedding_model,created_at,source_session_id FROM memories ORDER BY id DESC LIMIT ?",
                 (max(0, min(limit, 200)),),
             ).fetchall()
         return [dict(row) for row in rows]
@@ -282,3 +286,16 @@ class ConversationMemory:
                 connection.execute("DELETE FROM memories_vec WHERE memory_id=?", (memory_id,))
             cursor = connection.execute("DELETE FROM memories WHERE id=?", (memory_id,))
         return cursor.rowcount > 0
+
+    def delete_for_session(self, session_id: str) -> int:
+        with self._connect() as connection:
+            memory_ids = connection.execute(
+                "SELECT id FROM memories WHERE source_session_id=?", (session_id,)
+            ).fetchall()
+            if self.vector_index:
+                for row in memory_ids:
+                    connection.execute("DELETE FROM memories_vec WHERE memory_id=?", (row["id"],))
+            cursor = connection.execute(
+                "DELETE FROM memories WHERE source_session_id=?", (session_id,)
+            )
+        return cursor.rowcount
